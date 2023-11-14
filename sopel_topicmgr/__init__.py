@@ -5,40 +5,57 @@ Extensible topic-management plugin for Sopel IRC bots.
 from __future__ import annotations
 
 from sopel import plugin
-from sopel.tools import memories
+from sopel.tools import get_logger
 
-from . import manager
+from .managers import TopicManager
+from .providers import PropertyProvider
 
 
 CHANNELS = {
-    '#dgw': ('{welcome} | {description} | {comment}', {
-        'welcome': '#dgw da!',
-        'description': "dgw's private testing area for stuff that isn't even ready for other #Kaede users",
-        'comment': "also dgw's place to look things up privately using Internets",
-    }),
+    '#dgw': "#dgw da! | dgw's private testing area for really WIP stuff | Currently hacking on {wip.project}",
 }
+
+class WIPProjectProvider(PropertyProvider):
+    def defaults(self):
+        return {
+            'project': 'sopel-topicmgr',
+        }
+
+LOGGER = get_logger('topicmgr')
 
 
 def setup(bot):
-    # only set up the memory right now;
-    # need to wait until after connection for `bot.make_identifier()` to reflect ISUPPORT
-    bot.memory['topic_managers'] = memories.SopelIdentifierMemory(identifier_factory=bot.make_identifier)
+    LOGGER.debug("Creating topic manager")
+    bot.memory['topic_manager'] = TopicManager(bot)
 
 
 @plugin.event('JOIN')
-def register_topic_manager(bot, trigger):
+def register_channel_managers(bot, trigger):
     if trigger.nick == bot.nick and trigger.sender in CHANNELS:
-        deets = CHANNELS[trigger.sender]
-        bot.memory['topic_managers'][trigger.sender] = manager.TopicManager(
-            bot, trigger.sender, deets[0], deets[1],
+        LOGGER.debug("Registering channel %r", trigger.sender)
+        bot.memory['topic_manager'].register_channel(
+            trigger.sender, CHANNELS[trigger.sender],
         )
 
 
-@plugin.command('topicpart')
+@plugin.command('topicprop')
 def set_topic_part(bot, trigger):
-    part, value = trigger.group(2).split(' ', maxsplit=1)
-    bot.memory['topic_managers'][trigger.sender].parts[part] = value
+    if not trigger.group(3):
+        bot.reply("I need at least a property name.")
+        return
+
+    provider, prop = trigger.group(3).split('.', maxsplit=1)
+
+    try:
+        _, value = trigger.group(2).split(' ', maxsplit=1)
+    except ValueError:
+        value = bot.memory['topic_manager'].get_property(provider, prop)
+        bot.reply('{} = {}'.format(trigger.group(3), value))
+        return
+
+    bot.memory['topic_manager'].update_property(provider, prop, value)
+    bot.reply("Updated {} value: {}".format(trigger.group(3), value))
 
 
 def shutdown(bot):
-    del bot.memory['topic_managers']
+    del bot.memory['topic_manager']
